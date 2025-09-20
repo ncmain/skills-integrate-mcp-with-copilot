@@ -5,14 +5,38 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+import secrets
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
 from pathlib import Path
 
 app = FastAPI(title="Mergington High School API",
-              description="API for viewing and signing up for extracurricular activities")
+              description="API for viewing and signing up for extracurricular activities with roles and authentication")
+
+# Seguridad básica HTTP
+security = HTTPBasic()
+
+# Usuarios y roles en memoria
+users_db = {
+    "admin1": {"username": "admin1", "password": "adminpass", "role": "admin"},
+    "inst1": {"username": "inst1", "password": "instpass", "role": "institucion"},
+    "student1": {"username": "student1", "password": "studpass", "role": "estudiante"},
+    "parent1": {"username": "parent1", "password": "parentpass", "role": "padre"}
+}
+
+# Función para obtener usuario autenticado
+def get_current_user(credentials: HTTPBasicCredentials = Depends(security)):
+    user = users_db.get(credentials.username)
+    if not user or not secrets.compare_digest(credentials.password, user["password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciales inválidas",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return user
 
 # Mount the static files directory
 current_dir = Path(__file__).parent
@@ -84,49 +108,35 @@ def root():
 
 
 @app.get("/activities")
-def get_activities():
+def get_activities(user: dict = Depends(get_current_user)):
+    """Solo usuarios autenticados pueden ver actividades"""
     return activities
 
 
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
-    """Sign up a student for an activity"""
-    # Validate activity exists
+def signup_for_activity(activity_name: str, email: str, user: dict = Depends(get_current_user)):
+    """Solo admins e instituciones pueden registrar estudiantes"""
+    if user["role"] not in ["admin", "institucion"]:
+        raise HTTPException(status_code=403, detail="No tienes permisos para registrar estudiantes")
+    # Validar actividad
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
-
-    # Get the specific activity
     activity = activities[activity_name]
-
-    # Validate student is not already signed up
     if email in activity["participants"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Student is already signed up"
-        )
-
-    # Add student
+        raise HTTPException(status_code=400, detail="Student is already signed up")
     activity["participants"].append(email)
     return {"message": f"Signed up {email} for {activity_name}"}
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
-    """Unregister a student from an activity"""
-    # Validate activity exists
+def unregister_from_activity(activity_name: str, email: str, user: dict = Depends(get_current_user)):
+    """Solo admins e instituciones pueden desregistrar estudiantes"""
+    if user["role"] not in ["admin", "institucion"]:
+        raise HTTPException(status_code=403, detail="No tienes permisos para desregistrar estudiantes")
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
-
-    # Get the specific activity
     activity = activities[activity_name]
-
-    # Validate student is signed up
     if email not in activity["participants"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Student is not signed up for this activity"
-        )
-
-    # Remove student
+        raise HTTPException(status_code=400, detail="Student is not signed up for this activity")
     activity["participants"].remove(email)
     return {"message": f"Unregistered {email} from {activity_name}"}
